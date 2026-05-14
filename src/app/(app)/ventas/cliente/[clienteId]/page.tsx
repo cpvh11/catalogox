@@ -6,6 +6,14 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 
+interface Abono {
+  id: string;
+  monto: number;
+  saldo_restante: number;
+  fecha: string;
+  notas: string | null;
+}
+
 interface VentaFiado {
   id: string;
   descripcion: string;
@@ -14,6 +22,7 @@ interface VentaFiado {
   fecha: string;
   fecha_liquidacion: string | null;
   created_at: string;
+  abonos: Abono[];
 }
 
 interface Cliente {
@@ -31,11 +40,13 @@ export default function ClienteVentasPage({
   const router = useRouter();
   const supabase = createClient();
   const [clienteId, setClienteId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [ventas, setVentas] = useState<VentaFiado[]>([]);
   const [loading, setLoading] = useState(true);
   const [liquidando, setLiquidando] = useState<string | null>(null);
   const [montoAbono, setMontoAbono] = useState<Record<string, string>>({});
+  const [expandedVenta, setExpandedVenta] = useState<string | null>(null);
 
   useEffect(() => {
     params.then((p) => setClienteId(p.clienteId));
@@ -49,6 +60,7 @@ export default function ClienteVentasPage({
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) return;
+      setUserId(user.id);
 
       const { data: clienteData } = await supabase
         .from("clientes_fiado")
@@ -64,13 +76,41 @@ export default function ClienteVentasPage({
 
       setCliente(clienteData);
 
+      // Get ventas with abonos
       const { data: ventasData } = await supabase
         .from("ventas_fiado")
         .select("*")
         .eq("cliente_id", clienteId)
         .order("fecha", { ascending: false });
 
-      setVentas((ventasData as VentaFiado[]) || []);
+      const ventasWithAbonos: VentaFiado[] = [];
+
+      for (const venta of ventasData || []) {
+        const { data: abonosData } = await supabase
+          .from("abonos_fiado")
+          .select("*")
+          .eq("venta_fiado_id", venta.id)
+          .order("fecha", { ascending: true });
+
+        ventasWithAbonos.push({
+          id: venta.id,
+          descripcion: venta.descripcion,
+          monto: Number(venta.monto),
+          pagado: Number(venta.pagado),
+          fecha: venta.fecha,
+          fecha_liquidacion: venta.fecha_liquidacion,
+          created_at: venta.created_at,
+          abonos: (abonosData || []).map((a: Record<string, unknown>) => ({
+            id: a.id,
+            monto: Number(a.monto),
+            saldo_restante: Number(a.saldo_restante),
+            fecha: a.fecha,
+            notas: a.notas,
+          })),
+        });
+      }
+
+      setVentas(ventasWithAbonos);
       setLoading(false);
     }
 
@@ -78,7 +118,7 @@ export default function ClienteVentasPage({
   }, [clienteId, supabase, router]);
 
   const saldoTotal = ventas.reduce(
-    (sum, v) => sum + (Number(v.monto) - Number(v.pagado)),
+    (sum, v) => sum + (v.monto - v.pagado),
     0
   );
 
@@ -97,40 +137,57 @@ export default function ClienteVentasPage({
 
   async function handleAbonar(ventaId: string) {
     const monto = parseFloat(montoAbono[ventaId] || "0");
-    if (monto <= 0) return;
+    if (monto <= 0 || !userId) return;
 
     setLiquidando(ventaId);
 
     const venta = ventas.find((v) => v.id === ventaId);
     if (!venta) return;
 
-    const pendiente = Number(venta.monto) - Number(venta.pagado);
+    const pendiente = venta.monto - venta.pagado;
     const abonoReal = Math.min(monto, pendiente);
+    const nuevoSaldo = pendiente - abonoReal;
+    const nuevoPagado = venta.pagado + abonoReal;
 
-    const { error: pagoError } = await supabase.from("pagos_fiado").insert({
-      venta_id: ventaId,
+    // Insert abono with saldo_restante
+    const { error: abonoError } = await supabase.from("abonos_fiado").insert({
+      venta_fiado_id: ventaId,
+      user_id: userId,
       monto: abonoReal,
+      saldo_restante: nuevoSaldo,
       fecha: new Date().toISOString().split("T")[0],
     });
 
-    if (pagoError) {
-      console.error("Error registrando pago:", pagoError);
+    if (abonoError) {
+      console.error("Error registrando abono:", abonoError);
       setLiquidando(null);
       return;
     }
 
+    // Update ventas_fiado.pagado
     const { error: updateError } = await supabase
       .from("ventas_fiado")
-      .update({ pagado: Number(venta.pagado) + abonoReal })
+      .update({ pagado: nuevoPagado })
       .eq("id", ventaId);
 
     if (updateError) {
       console.error("Error actualizando venta:", updateError);
     }
 
+    // Update local state
+    const newAbono: Abono = {
+      id: crypto.randomUUID(),
+      monto: abonoReal,
+      saldo_restante: nuevoSaldo,
+      fecha: new Date().toISOString().split("T")[0],
+      notas: null,
+    };
+
     setVentas((prev) =>
       prev.map((v) =>
-        v.id === ventaId ? { ...v, pagado: Number(v.pagado) + abonoReal } : v
+        v.id === ventaId
+          ? { ...v, pagado: nuevoPagado, abonos: [...v.abonos, newAbono] }
+          : v
       )
     );
     setMontoAbono((prev) => ({ ...prev, [ventaId]: "" }));
@@ -138,25 +195,31 @@ export default function ClienteVentasPage({
   }
 
   async function handleLiquidarTotal(ventaId: string) {
+    if (!userId) return;
     setLiquidando(ventaId);
 
     const venta = ventas.find((v) => v.id === ventaId);
     if (!venta) return;
 
-    const pendiente = Number(venta.monto) - Number(venta.pagado);
+    const pendiente = venta.monto - venta.pagado;
 
-    const { error: pagoError } = await supabase.from("pagos_fiado").insert({
-      venta_id: ventaId,
+    // Insert abono with saldo_restante = 0
+    const { error: abonoError } = await supabase.from("abonos_fiado").insert({
+      venta_fiado_id: ventaId,
+      user_id: userId,
       monto: pendiente,
+      saldo_restante: 0,
       fecha: new Date().toISOString().split("T")[0],
+      notas: "Liquidación total",
     });
 
-    if (pagoError) {
-      console.error("Error registrando pago:", pagoError);
+    if (abonoError) {
+      console.error("Error registrando abono:", abonoError);
       setLiquidando(null);
       return;
     }
 
+    // Update ventas_fiado.pagado
     const { error: updateError } = await supabase
       .from("ventas_fiado")
       .update({ pagado: venta.monto })
@@ -166,8 +229,21 @@ export default function ClienteVentasPage({
       console.error("Error actualizando venta:", updateError);
     }
 
+    // Update local state
+    const newAbono: Abono = {
+      id: crypto.randomUUID(),
+      monto: pendiente,
+      saldo_restante: 0,
+      fecha: new Date().toISOString().split("T")[0],
+      notas: "Liquidación total",
+    };
+
     setVentas((prev) =>
-      prev.map((v) => (v.id === ventaId ? { ...v, pagado: v.monto } : v))
+      prev.map((v) =>
+        v.id === ventaId
+          ? { ...v, pagado: v.monto, abonos: [...v.abonos, newAbono] }
+          : v
+      )
     );
     setLiquidando(null);
   }
@@ -178,6 +254,14 @@ export default function ClienteVentasPage({
       day: "numeric",
       month: "short",
       year: "numeric",
+    });
+  }
+
+  function formatShortDate(dateStr: string): string {
+    const date = new Date(dateStr + "T12:00:00");
+    return date.toLocaleDateString("es-MX", {
+      day: "numeric",
+      month: "short",
     });
   }
 
@@ -258,9 +342,10 @@ export default function ClienteVentasPage({
       {ventas.length > 0 ? (
         <div className="space-y-4">
           {ventas.map((venta) => {
-            const pendiente = Number(venta.monto) - Number(venta.pagado);
+            const pendiente = venta.monto - venta.pagado;
             const liquidado = pendiente <= 0;
             const status = getStatus(venta.fecha_liquidacion);
+            const isExpanded = expandedVenta === venta.id;
 
             return (
               <div
@@ -314,6 +399,50 @@ export default function ClienteVentasPage({
                     )}
                   </div>
                 </div>
+
+                {/* Payment history */}
+                {venta.abonos.length > 0 && (
+                  <div className="mb-3">
+                    <button
+                      onClick={() => setExpandedVenta(isExpanded ? null : venta.id)}
+                      className="text-sm text-primary hover:underline flex items-center gap-1"
+                    >
+                      <svg
+                        className={`w-4 h-4 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                      {venta.abonos.length} abono{venta.abonos.length !== 1 ? "s" : ""} registrado{venta.abonos.length !== 1 ? "s" : ""}
+                    </button>
+
+                    {isExpanded && (
+                      <div className="mt-2 ml-5 space-y-2">
+                        {venta.abonos.map((abono, idx) => (
+                          <div
+                            key={abono.id}
+                            className="flex items-center justify-between text-sm py-2 px-3 bg-surface rounded-md"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-muted">{formatShortDate(abono.fecha)}</span>
+                              <span className="font-mono text-success">
+                                +{formatCurrency(abono.monto)}
+                              </span>
+                              {abono.notas && (
+                                <span className="text-muted text-xs">({abono.notas})</span>
+                              )}
+                            </div>
+                            <span className="text-muted text-xs">
+                              Saldo: {formatCurrency(abono.saldo_restante)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {!liquidado && (
                   <div className="flex items-center gap-2 pt-3 border-t border-border">
