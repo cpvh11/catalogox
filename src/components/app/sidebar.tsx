@@ -7,6 +7,26 @@ import { createClient } from "@/lib/supabase/client";
 
 const navItems = [
   {
+    href: "/ventas/nueva",
+    label: "Registrar venta",
+    icon: (
+      <svg
+        className="w-5 h-5"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+        />
+      </svg>
+    ),
+    highlight: true,
+  },
+  {
     href: "/dashboard",
     label: "Dashboard",
     icon: (
@@ -157,7 +177,8 @@ export function Sidebar() {
           {navItems.map((item) => {
             const isActive =
               pathname === item.href ||
-              (item.href !== "/dashboard" && pathname.startsWith(item.href));
+              (item.href !== "/dashboard" && item.href !== "/ventas/nueva" && pathname.startsWith(item.href.split("/")[1] ? "/" + item.href.split("/")[1] : item.href));
+            const isHighlight = "highlight" in item && item.highlight;
 
             return (
               <Link
@@ -165,7 +186,9 @@ export function Sidebar() {
                 href={item.href}
                 className={cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
+                  isHighlight
+                    ? "bg-primary text-white hover:bg-primary-light"
+                    : isActive
                     ? "bg-primary/10 text-primary"
                     : "text-muted hover:bg-surface hover:text-foreground"
                 )}

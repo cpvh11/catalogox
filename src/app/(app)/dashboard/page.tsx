@@ -6,16 +6,31 @@ export const dynamic = "force-dynamic";
 async function getStats(userId: string) {
   const supabase = await createClient();
 
-  const [productosResult, catalogosResult] = await Promise.all([
+  const today = new Date().toISOString().split("T")[0];
+  const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split("T")[0];
+
+  const [productosResult, catalogosResult, ventasHoyResult, ventasMesResult] = await Promise.all([
     supabase
       .from("productos")
       .select("id, costo, precio_menudeo, stock, activo")
       .eq("user_id", userId),
     supabase.from("catalogos").select("id").eq("user_id", userId),
+    supabase
+      .from("ventas")
+      .select("total, costo_total")
+      .eq("user_id", userId)
+      .eq("fecha", today),
+    supabase
+      .from("ventas")
+      .select("total, costo_total")
+      .eq("user_id", userId)
+      .gte("fecha", firstOfMonth),
   ]);
 
   const productos = productosResult.data || [];
   const catalogos = catalogosResult.data || [];
+  const ventasHoy = ventasHoyResult.data || [];
+  const ventasMes = ventasMesResult.data || [];
 
   const productosActivos = productos.filter((p) => p.activo).length;
   const productosBajoStock = productos.filter(
@@ -35,6 +50,11 @@ async function getStats(userId: string) {
   const margenPromedio =
     costoTotal > 0 ? ((precioTotal - costoTotal) / costoTotal) * 100 : 0;
 
+  const ventasHoyTotal = ventasHoy.reduce((sum, v) => sum + Number(v.total), 0);
+  const gananciaHoy = ventasHoy.reduce((sum, v) => sum + (Number(v.total) - Number(v.costo_total)), 0);
+  const ventasMesTotal = ventasMes.reduce((sum, v) => sum + Number(v.total), 0);
+  const gananciaMes = ventasMes.reduce((sum, v) => sum + (Number(v.total) - Number(v.costo_total)), 0);
+
   return {
     productosActivos,
     productosBajoStock,
@@ -42,6 +62,11 @@ async function getStats(userId: string) {
     valorInventario: costoTotal,
     utilidadPotencial,
     margenPromedio,
+    ventasHoy: ventasHoyTotal,
+    gananciaHoy,
+    ventasMes: ventasMesTotal,
+    gananciaMes,
+    numVentasHoy: ventasHoy.length,
   };
 }
 
@@ -74,6 +99,37 @@ export default async function DashboardPage() {
         <p className="text-muted mt-1">Resumen de tu negocio</p>
       </div>
 
+      {/* Ventas de hoy */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <StatCard
+          title="Ventas hoy"
+          value={formatCurrency(stats.ventasHoy)}
+          subtitle={`${stats.numVentasHoy} venta${stats.numVentasHoy !== 1 ? "s" : ""}`}
+          mono
+        />
+        <StatCard
+          title="Ganancia hoy"
+          value={formatCurrency(stats.gananciaHoy)}
+          subtitle="utilidad neta"
+          mono
+          positive={stats.gananciaHoy > 0}
+        />
+        <StatCard
+          title="Ventas del mes"
+          value={formatCurrency(stats.ventasMes)}
+          subtitle="total facturado"
+          mono
+        />
+        <StatCard
+          title="Ganancia del mes"
+          value={formatCurrency(stats.gananciaMes)}
+          subtitle="utilidad neta"
+          mono
+          positive={stats.gananciaMes > 0}
+        />
+      </div>
+
+      {/* Inventario */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatCard
           title="Productos activos"
@@ -107,6 +163,13 @@ export default async function DashboardPage() {
             Acciones rápidas
           </h2>
           <div className="space-y-3">
+            <a
+              href="/ventas/nueva"
+              className="block p-4 rounded-md bg-primary text-white hover:bg-primary-light transition-colors"
+            >
+              <p className="font-medium">+ Registrar venta</p>
+              <p className="text-sm text-white/80">Registra una venta en efectivo</p>
+            </a>
             <QuickAction
               href="/productos/nuevo"
               label="Agregar producto"
@@ -118,9 +181,9 @@ export default async function DashboardPage() {
               description="Genera un catálogo para compartir"
             />
             <QuickAction
-              href="/configuracion/negocio"
-              label="Configurar negocio"
-              description="Personaliza tu marca y perfil"
+              href="/fiado/nuevo"
+              label="Venta a crédito"
+              description="Registra una venta fiada"
             />
           </div>
         </div>
