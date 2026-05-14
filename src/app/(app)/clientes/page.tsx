@@ -1,8 +1,9 @@
-import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
-import { formatCurrency } from "@/lib/utils";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
+import { formatCurrency } from "@/lib/utils";
 
 interface ClienteConStats {
   id: string;
@@ -16,101 +17,109 @@ interface ClienteConStats {
   saldo_pendiente: number;
 }
 
-export default async function ClientesPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+type Filtro = "todos" | "con_deuda" | "sin_deuda";
 
-  if (!user) return null;
+export default function ClientesPage() {
+  const supabase = createClient();
+  const [loading, setLoading] = useState(true);
+  const [allClientes, setAllClientes] = useState<ClienteConStats[]>([]);
+  const [filtro, setFiltro] = useState<Filtro>("todos");
 
-  // Get all clients from the clientes table
-  const { data: clientes } = await supabase
-    .from("clientes")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("nombre");
+  useEffect(() => {
+    async function loadData() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
 
-  // Get fiado data to calculate stats
-  const { data: ventasFiado } = await supabase
-    .from("ventas_fiado")
-    .select("cliente_id, monto, pagado, fecha, clientes_fiado(nombre)")
-    .eq("user_id", user.id);
+      const [clientesRes, ventasFiadoRes, clientesFiadoRes] = await Promise.all([
+        supabase.from("clientes").select("*").eq("user_id", user.id).order("nombre"),
+        supabase
+          .from("ventas_fiado")
+          .select("cliente_id, monto, pagado, fecha")
+          .eq("user_id", user.id),
+        supabase.from("clientes_fiado").select("*").eq("user_id", user.id),
+      ]);
 
-  // Also get clientes_fiado for backwards compatibility
-  const { data: clientesFiado } = await supabase
-    .from("clientes_fiado")
-    .select("*")
-    .eq("user_id", user.id);
+      const clientes = clientesRes.data || [];
+      const ventasFiado = ventasFiadoRes.data || [];
+      const clientesFiado = clientesFiadoRes.data || [];
 
-  // Build a map of fiado stats by cliente_fiado id
-  const fiadoStatsByClienteId = new Map<
-    string,
-    { total: number; pendiente: number; ultimaVenta: string | null }
-  >();
+      const fiadoStatsByClienteId = new Map<
+        string,
+        { total: number; pendiente: number; ultimaVenta: string | null }
+      >();
 
-  if (ventasFiado) {
-    for (const venta of ventasFiado) {
-      const stats = fiadoStatsByClienteId.get(venta.cliente_id) || {
-        total: 0,
-        pendiente: 0,
-        ultimaVenta: null,
-      };
-      stats.total += Number(venta.monto);
-      stats.pendiente += Number(venta.monto) - Number(venta.pagado);
-      if (!stats.ultimaVenta || venta.fecha > stats.ultimaVenta) {
-        stats.ultimaVenta = venta.fecha;
+      for (const venta of ventasFiado) {
+        const stats = fiadoStatsByClienteId.get(venta.cliente_id) || {
+          total: 0,
+          pendiente: 0,
+          ultimaVenta: null,
+        };
+        stats.total += Number(venta.monto);
+        stats.pendiente += Number(venta.monto) - Number(venta.pagado);
+        if (!stats.ultimaVenta || venta.fecha > stats.ultimaVenta) {
+          stats.ultimaVenta = venta.fecha;
+        }
+        fiadoStatsByClienteId.set(venta.cliente_id, stats);
       }
-      fiadoStatsByClienteId.set(venta.cliente_id, stats);
-    }
-  }
 
-  // Combine clientes table with clientes_fiado for complete view
-  const allClientes: ClienteConStats[] = [];
+      const combined: ClienteConStats[] = [];
 
-  // Add clients from the new clientes table
-  if (clientes) {
-    for (const cliente of clientes) {
-      allClientes.push({
-        id: cliente.id,
-        nombre: cliente.nombre,
-        telefono: cliente.telefono,
-        email: cliente.email,
-        notas: cliente.notas,
-        created_at: cliente.created_at,
-        ultima_venta: null,
-        total_comprado: 0,
-        saldo_pendiente: 0,
-      });
-    }
-  }
-
-  // Add clients from clientes_fiado that aren't in the main table
-  if (clientesFiado) {
-    const existingNames = new Set(allClientes.map((c) => c.nombre.toLowerCase()));
-    for (const cliente of clientesFiado) {
-      if (!existingNames.has(cliente.nombre.toLowerCase())) {
-        const stats = fiadoStatsByClienteId.get(cliente.id);
-        allClientes.push({
+      for (const cliente of clientes) {
+        combined.push({
           id: cliente.id,
           nombre: cliente.nombre,
           telefono: cliente.telefono,
-          email: null,
+          email: cliente.email,
           notas: cliente.notas,
           created_at: cliente.created_at,
-          ultima_venta: stats?.ultimaVenta || null,
-          total_comprado: stats?.total || 0,
-          saldo_pendiente: stats?.pendiente || 0,
+          ultima_venta: null,
+          total_comprado: 0,
+          saldo_pendiente: 0,
         });
       }
-    }
-  }
 
-  // Sort by name
-  allClientes.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      const existingNames = new Set(combined.map((c) => c.nombre.toLowerCase()));
+      for (const cliente of clientesFiado) {
+        if (!existingNames.has(cliente.nombre.toLowerCase())) {
+          const stats = fiadoStatsByClienteId.get(cliente.id);
+          combined.push({
+            id: cliente.id,
+            nombre: cliente.nombre,
+            telefono: cliente.telefono,
+            email: null,
+            notas: cliente.notas,
+            created_at: cliente.created_at,
+            ultima_venta: stats?.ultimaVenta || null,
+            total_comprado: stats?.total || 0,
+            saldo_pendiente: stats?.pendiente || 0,
+          });
+        }
+      }
+
+      combined.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      setAllClientes(combined);
+      setLoading(false);
+    }
+
+    loadData();
+  }, [supabase]);
+
+  const clientesFiltrados = useMemo(() => {
+    switch (filtro) {
+      case "con_deuda":
+        return allClientes.filter((c) => c.saldo_pendiente > 0);
+      case "sin_deuda":
+        return allClientes.filter((c) => c.saldo_pendiente <= 0);
+      default:
+        return allClientes;
+    }
+  }, [allClientes, filtro]);
 
   const totalClientes = allClientes.length;
   const clientesConDeuda = allClientes.filter((c) => c.saldo_pendiente > 0).length;
+  const clientesSinDeuda = allClientes.filter((c) => c.saldo_pendiente <= 0).length;
 
   function formatDate(dateStr: string | null): string {
     if (!dateStr) return "-";
@@ -122,19 +131,22 @@ export default async function ClientesPage() {
     });
   }
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-muted">Cargando...</div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Clientes</h1>
           <p className="text-muted mt-1">
             {totalClientes} cliente{totalClientes !== 1 ? "s" : ""} registrado
             {totalClientes !== 1 ? "s" : ""}
-            {clientesConDeuda > 0 && (
-              <span className="text-danger ml-2">
-                ({clientesConDeuda} con saldo pendiente)
-              </span>
-            )}
           </p>
         </div>
         <Link
@@ -145,7 +157,41 @@ export default async function ClientesPage() {
         </Link>
       </div>
 
-      {allClientes.length > 0 ? (
+      {/* Filtros */}
+      <div className="flex gap-2 mb-6">
+        <button
+          onClick={() => setFiltro("todos")}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            filtro === "todos"
+              ? "bg-primary text-white"
+              : "bg-surface text-foreground hover:bg-border/50"
+          }`}
+        >
+          Todos ({totalClientes})
+        </button>
+        <button
+          onClick={() => setFiltro("con_deuda")}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            filtro === "con_deuda"
+              ? "bg-danger text-white"
+              : "bg-surface text-foreground hover:bg-border/50"
+          }`}
+        >
+          Con saldo pendiente ({clientesConDeuda})
+        </button>
+        <button
+          onClick={() => setFiltro("sin_deuda")}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            filtro === "sin_deuda"
+              ? "bg-success text-white"
+              : "bg-surface text-foreground hover:bg-border/50"
+          }`}
+        >
+          Sin deuda ({clientesSinDeuda})
+        </button>
+      </div>
+
+      {clientesFiltrados.length > 0 ? (
         <div className="bg-white rounded-lg border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -172,7 +218,7 @@ export default async function ClientesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {allClientes.map((cliente) => (
+                {clientesFiltrados.map((cliente) => (
                   <tr key={cliente.id} className="hover:bg-surface/50">
                     <td className="px-6 py-4">
                       <Link
@@ -214,7 +260,7 @@ export default async function ClientesPage() {
                           {formatCurrency(cliente.saldo_pendiente)}
                         </span>
                       ) : (
-                        <span className="text-muted">-</span>
+                        <span className="text-success text-sm">Al día</span>
                       )}
                     </td>
                   </tr>
@@ -222,6 +268,18 @@ export default async function ClientesPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      ) : allClientes.length > 0 ? (
+        <div className="bg-white rounded-lg border border-border p-12 text-center">
+          <p className="text-muted">
+            No hay clientes que coincidan con el filtro seleccionado.
+          </p>
+          <button
+            onClick={() => setFiltro("todos")}
+            className="mt-4 text-primary hover:underline"
+          >
+            Ver todos los clientes
+          </button>
         </div>
       ) : (
         <div className="bg-white rounded-lg border border-border p-12 text-center">
