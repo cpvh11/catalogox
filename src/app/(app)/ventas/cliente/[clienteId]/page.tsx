@@ -12,6 +12,7 @@ interface VentaFiado {
   monto: number;
   pagado: number;
   fecha: string;
+  fecha_liquidacion: string | null;
   created_at: string;
 }
 
@@ -22,7 +23,7 @@ interface Cliente {
   notas: string | null;
 }
 
-export default function ClienteFiadoPage({
+export default function ClienteVentasPage({
   params,
 }: {
   params: Promise<{ clienteId: string }>;
@@ -57,7 +58,7 @@ export default function ClienteFiadoPage({
         .single();
 
       if (!clienteData) {
-        router.push("/fiado");
+        router.push("/ventas");
         return;
       }
 
@@ -80,6 +81,19 @@ export default function ClienteFiadoPage({
     (sum, v) => sum + (Number(v.monto) - Number(v.pagado)),
     0
   );
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  function getStatus(fechaLiquidacion: string | null): "vencido" | "proximo" | "normal" {
+    if (!fechaLiquidacion) return "normal";
+    const fecha = new Date(fechaLiquidacion);
+    const in7Days = new Date(today);
+    in7Days.setDate(in7Days.getDate() + 7);
+    if (fecha < today) return "vencido";
+    if (fecha <= in7Days) return "proximo";
+    return "normal";
+  }
 
   async function handleAbonar(ventaId: string) {
     const monto = parseFloat(montoAbono[ventaId] || "0");
@@ -183,10 +197,10 @@ export default function ClienteFiadoPage({
     <div className="max-w-4xl">
       <div className="mb-8">
         <Link
-          href="/fiado"
+          href="/ventas"
           className="text-sm text-muted hover:text-foreground"
         >
-          ← Volver a fiado
+          ← Volver a ventas
         </Link>
       </div>
 
@@ -203,6 +217,14 @@ export default function ClienteFiadoPage({
                   className="hover:text-primary"
                 >
                   {cliente.telefono}
+                </a>
+                <a
+                  href={`https://wa.me/${cliente.telefono.replace(/\D/g, "")}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-3 text-success hover:underline"
+                >
+                  WhatsApp
                 </a>
               </p>
             )}
@@ -223,13 +245,13 @@ export default function ClienteFiadoPage({
 
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-foreground">
-          Historial de ventas
+          Historial de créditos
         </h2>
         <Link
-          href="/fiado/nuevo"
+          href="/ventas/credito"
           className="text-sm text-primary hover:underline"
         >
-          + Nueva venta
+          + Nueva venta a crédito
         </Link>
       </div>
 
@@ -238,27 +260,50 @@ export default function ClienteFiadoPage({
           {ventas.map((venta) => {
             const pendiente = Number(venta.monto) - Number(venta.pagado);
             const liquidado = pendiente <= 0;
+            const status = getStatus(venta.fecha_liquidacion);
 
             return (
               <div
                 key={venta.id}
-                className={`bg-white rounded-lg border p-4 ${liquidado ? "border-success/30 bg-success/5" : "border-border"}`}
+                className={`bg-white rounded-lg border p-4 ${
+                  liquidado
+                    ? "border-success/30 bg-success/5"
+                    : status === "vencido"
+                      ? "border-danger bg-danger/5"
+                      : status === "proximo"
+                        ? "border-warning bg-warning/5"
+                        : "border-border"
+                }`}
               >
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <p className="font-medium text-foreground">
                       {venta.descripcion || "Venta a crédito"}
                     </p>
-                    <p className="text-sm text-muted">
-                      {formatDate(venta.fecha)}
-                    </p>
+                    <div className="flex items-center gap-3 text-sm text-muted mt-1">
+                      <span>Venta: {formatDate(venta.fecha)}</span>
+                      {venta.fecha_liquidacion && !liquidado && (
+                        <span
+                          className={
+                            status === "vencido"
+                              ? "text-danger font-medium"
+                              : status === "proximo"
+                                ? "text-warning font-medium"
+                                : ""
+                          }
+                        >
+                          Vence: {formatDate(venta.fecha_liquidacion)}
+                          {status === "vencido" && " (VENCIDO)"}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="text-right">
                     <p className="font-mono font-semibold text-foreground">
                       {formatCurrency(venta.monto)}
                     </p>
                     {!liquidado && (
-                      <p className="text-sm text-danger">
+                      <p className={`text-sm ${status === "vencido" ? "text-danger font-medium" : "text-danger"}`}>
                         Pendiente: {formatCurrency(pendiente)}
                       </p>
                     )}
@@ -319,13 +364,13 @@ export default function ClienteFiadoPage({
       ) : (
         <div className="bg-white rounded-lg border border-border p-12 text-center">
           <p className="text-muted mb-4">
-            Este cliente no tiene ventas registradas.
+            Este cliente no tiene ventas a crédito registradas.
           </p>
           <Link
-            href="/fiado/nuevo"
+            href="/ventas/credito"
             className="inline-block px-4 py-2 bg-primary text-white rounded-md font-medium hover:bg-primary-light"
           >
-            Registrar venta
+            Registrar venta a crédito
           </Link>
         </div>
       )}

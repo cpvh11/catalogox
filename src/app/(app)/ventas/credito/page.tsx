@@ -12,7 +12,7 @@ interface Cliente {
   telefono: string | null;
 }
 
-export default function NuevaVentaFiadoPage() {
+export default function VentaCreditoPage() {
   const router = useRouter();
   const supabase = createClient();
 
@@ -28,6 +28,7 @@ export default function NuevaVentaFiadoPage() {
   const [monto, setMonto] = useState("");
   const [descripcion, setDescripcion] = useState("");
   const [fecha, setFecha] = useState(new Date().toISOString().split("T")[0]);
+  const [fechaLiquidacion, setFechaLiquidacion] = useState("");
   const [isNewClient, setIsNewClient] = useState(false);
 
   useEffect(() => {
@@ -46,7 +47,6 @@ export default function NuevaVentaFiadoPage() {
       setClientes(data || []);
       setLoadingClientes(false);
 
-      // If no clients, default to new client mode
       if (!data || data.length === 0) {
         setIsNewClient(true);
       }
@@ -89,7 +89,6 @@ export default function NuevaVentaFiadoPage() {
 
     let finalClienteId = clienteId;
 
-    // Create new client if needed
     if (isNewClient) {
       const { data: newCliente, error: clienteError } = await supabase
         .from("clientes_fiado")
@@ -110,7 +109,6 @@ export default function NuevaVentaFiadoPage() {
       finalClienteId = newCliente.id;
     }
 
-    // Create the sale
     const { error: ventaError } = await supabase.from("ventas_fiado").insert({
       user_id: user.id,
       cliente_id: finalClienteId,
@@ -118,6 +116,7 @@ export default function NuevaVentaFiadoPage() {
       monto: montoNum,
       pagado: 0,
       fecha,
+      fecha_liquidacion: fechaLiquidacion || null,
     });
 
     if (ventaError) {
@@ -126,22 +125,29 @@ export default function NuevaVentaFiadoPage() {
       return;
     }
 
-    router.push("/fiado");
+    router.push("/ventas");
     router.refresh();
+  }
+
+  function getDefaultLiquidacionDate() {
+    const date = new Date();
+    date.setDate(date.getDate() + 15);
+    return date.toISOString().split("T")[0];
   }
 
   return (
     <div className="max-w-xl">
       <div className="mb-8">
         <Link
-          href="/fiado"
+          href="/ventas"
           className="text-sm text-muted hover:text-foreground"
         >
-          ← Volver a fiado
+          ← Volver a ventas
         </Link>
         <h1 className="text-2xl font-semibold text-foreground mt-2">
-          Registrar venta a crédito
+          Venta a Crédito
         </h1>
+        <p className="text-muted mt-1">Registra una venta fiada con fecha de pago acordada</p>
       </div>
 
       {error && (
@@ -269,23 +275,41 @@ export default function NuevaVentaFiadoPage() {
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">
-              Fecha de la venta
-            </label>
-            <input
-              type="date"
-              value={fecha}
-              onChange={(e) => setFecha(e.target.value)}
-              className="w-full max-w-xs px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1">
+                Fecha de la venta
+              </label>
+              <input
+                type="date"
+                value={fecha}
+                onChange={(e) => setFecha(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1">
+                Fecha de pago acordada
+              </label>
+              <input
+                type="date"
+                value={fechaLiquidacion}
+                onChange={(e) => setFechaLiquidacion(e.target.value)}
+                min={fecha}
+                placeholder={getDefaultLiquidacionDate()}
+                className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+              <p className="text-xs text-muted mt-1">
+                ¿Cuándo esperas que te pague?
+              </p>
+            </div>
           </div>
         </div>
 
         {/* Preview */}
         {monto && parseFloat(monto) > 0 && (
-          <div className="bg-surface rounded-lg border border-border p-4">
-            <p className="text-sm text-muted">Resumen:</p>
+          <div className="bg-warning/10 border border-warning/30 rounded-lg p-4">
+            <p className="text-sm text-muted">Resumen del crédito:</p>
             <p className="text-lg font-semibold text-foreground">
               {isNewClient ? nuevoCliente || "Nuevo cliente" : clientes.find(c => c.id === clienteId)?.nombre || "Cliente"}
               {" "}debe{" "}
@@ -293,6 +317,18 @@ export default function NuevaVentaFiadoPage() {
                 {formatCurrency(parseFloat(monto))}
               </span>
             </p>
+            {fechaLiquidacion && (
+              <p className="text-sm text-muted mt-1">
+                Fecha de pago acordada:{" "}
+                <span className="font-medium text-foreground">
+                  {new Date(fechaLiquidacion + "T12:00:00").toLocaleDateString("es-MX", {
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                  })}
+                </span>
+              </p>
+            )}
           </div>
         )}
 
@@ -302,10 +338,10 @@ export default function NuevaVentaFiadoPage() {
             disabled={loading}
             className="px-6 py-2 bg-primary text-white rounded-md font-medium hover:bg-primary-light disabled:opacity-50"
           >
-            {loading ? "Guardando..." : "Registrar venta"}
+            {loading ? "Guardando..." : "Registrar crédito"}
           </button>
           <Link
-            href="/fiado"
+            href="/ventas"
             className="px-6 py-2 border border-border rounded-md font-medium hover:bg-surface"
           >
             Cancelar

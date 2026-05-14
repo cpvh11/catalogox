@@ -103,8 +103,8 @@ const navItems = [
     ),
   },
   {
-    href: "/fiado",
-    label: "Fiado",
+    href: "/ventas",
+    label: "Ventas",
     icon: (
       <svg
         className="w-5 h-5"

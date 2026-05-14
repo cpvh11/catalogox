@@ -181,7 +181,7 @@ export default async function DashboardPage() {
               description="Genera un catálogo para compartir"
             />
             <QuickAction
-              href="/fiado/nuevo"
+              href="/ventas/credito"
               label="Venta a crédito"
               description="Registra una venta fiada"
             />
